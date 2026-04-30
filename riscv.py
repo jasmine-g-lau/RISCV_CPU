@@ -1,13 +1,7 @@
-"""
-CSE 140 Project - Single-Cycle RISC-V CPU Simulator
-Supports: lw, sw, add, addi, sub, and, andi, or, ori, beq, jal, jalr
-"""
-
 import sys
 
-# ─────────────────────────────────────────────
-# Register name mapping (ABI names)
-# ─────────────────────────────────────────────
+#registers ABI names 
+#zero through t6
 REG_NAMES = {
     0: "zero", 1: "ra",  2: "sp",  3: "gp",
     4: "tp",   5: "t0",  6: "t1",  7: "t2",
@@ -19,35 +13,38 @@ REG_NAMES = {
     28: "t3",  29: "t4", 30: "t5", 31: "t6",
 }
 
-# ─────────────────────────────────────────────
-# Global state
-# ─────────────────────────────────────────────
-pc = 0
+#global values
+#Declare a global variable named “pc” and initialize it as 0
+pc = 0 
+
+#Declare one variable named “next_pc” and store “pc” + 4
 next_pc = 0
 branch_target = 0
 alu_zero = 0
 total_clock_cycles = 0
 
-# Register file: 32 registers, all zero
+#integer array that has 32 entries
+#initialized to have all zeros
 rf = [0] * 32
 
-# Data memory: 32 entries (each = 4 bytes), address 0x00–0x7C
+#data memory
+#32 entries, each = 4 bytes, address 0x00–0x7C
 d_mem = [0] * 32
 
-# Control signals
+#lw, sw, add, addi, sub, and, andi, or, ori, beq, jal, jalr
 RegWrite = 0
 ALUSrc   = 0
 MemWrite = 0
 MemRead  = 0
 MemToReg = 0
 Branch   = 0
-Jump     = 0   # for JAL
-JumpR    = 0   # for JALR
+Jump     = 0   
+JumpR    = 0   
 
-# ALU control code
+#4-bit “alu_ctrl” input and run the operation indicated
 alu_ctrl = 0b0000
 
-# Decoded instruction fields (globals shared across pipeline stages)
+#instructions 
 opcode   = 0
 rd       = 0
 rs1      = 0
@@ -59,60 +56,39 @@ rs1_val  = 0
 rs2_val  = 0
 alu_result = 0
 mem_data   = 0
-pc_at_decode = 0   # PC value when instruction was fetched (needed for JAL/JALR wb)
+pc_at_decode = 0   #PC value when instruction was fetched, for JAL/JALR wb
 
-
-# ─────────────────────────────────────────────
-# Instruction memory (loaded from file)
-# ─────────────────────────────────────────────
+#instruction memory loaded 
 instructions = []
 
-
 def load_program(filename: str):
-    """Read binary instruction strings from file."""
+    #loads the binary instruction
     global instructions
     instructions = []
     with open(filename, "r") as f:
         for line in f:
             line = line.strip()
             if line:
+                #convert binary to int
                 instructions.append(int(line, 2))
 
 
-# ─────────────────────────────────────────────
-# Helper: sign-extend a value from bit_width
-# ─────────────────────────────────────────────
-def sign_extend(value: int, bit_width: int) -> int:
-    if value & (1 << (bit_width - 1)):
-        value -= (1 << bit_width)
-    return value
-
-
-# ─────────────────────────────────────────────
-# FETCH
-# ─────────────────────────────────────────────
+#Fetch()
 def Fetch() -> int | None:
-    """
-    Read the instruction pointed to by pc.
-    pc is a byte address; instruction index = pc // 4.
-    Updates pc for the next cycle.
-    Returns the 32-bit instruction word, or None if past end.
-    """
     global pc, next_pc, branch_target, alu_zero, Branch, Jump, JumpR
 
+    #fetch instruciton pointed by PC value
+    #read the ith instruction that is pointed by PC value, 4*i
     idx = pc // 4
     if idx >= len(instructions):
         return None
 
     instr = instructions[idx]
 
+    #PC value incremented by 4
     next_pc = pc + 4
 
-    # After execution, choose next PC:
-    #   Branch taken  : branch_target
-    #   JAL           : branch_target  (set by Execute)
-    #   JALR          : branch_target  (set by Execute)
-    #   Otherwise     : next_pc
+    #copies next_pc or branch_target to pc variable
     if Branch and alu_zero:
         pc = branch_target
     elif Jump or JumpR:
@@ -123,18 +99,9 @@ def Fetch() -> int | None:
     return instr
 
 
-# ─────────────────────────────────────────────
-# CONTROL UNIT  (called inside Decode)
-# ─────────────────────────────────────────────
+#called by Control Unit 
+#translates APUOp, func3, func7
 def ALUControl(alu_op: int, f3: int, f7_bit: int) -> int:
-    """
-    Generate 4-bit alu_ctrl from ALUOp + funct3/funct7.
-    ALUOp encoding:
-        00 → ADD  (lw/sw)
-        01 → SUB  (beq)
-        10 → R-type / I-type arithmetic
-        11 → reserved
-    """
     if alu_op == 0b00:
         return 0b0010   # ADD
     if alu_op == 0b01:
@@ -151,11 +118,10 @@ def ALUControl(alu_op: int, f3: int, f7_bit: int) -> int:
     # addi / andi / ori (I-type) fall through here
     return 0b0010           # default ADD
 
-
+#Control Unit (Called at end of Decode() sets global control signals)
+#translates opcode
+#section 2: new signals, JAL and JALR opcode
 def ControlUnit(op: int, f3: int, f7: int):
-    """
-    Set global control signals from 7-bit opcode.
-    """
     global RegWrite, ALUSrc, MemWrite, MemRead, MemToReg
     global Branch, Jump, JumpR, alu_ctrl
 
@@ -201,16 +167,19 @@ def ControlUnit(op: int, f3: int, f7: int):
         ALUSrc   = 1
         alu_ctrl = 0b0010     # ADD
 
+#Decode()
 
-# ─────────────────────────────────────────────
-# DECODE
-# ─────────────────────────────────────────────
+#sign-extend
+#offset field of I-type
+def sign_extend(value: int, bit_width: int) -> int:
+    if value & (1 << (bit_width - 1)):
+        value -= (1 << bit_width)
+    return value
+
+#fetched by Fetch()
+#extracts JAL and JALR
+#section 2: destination register rd and source registers identified
 def Decode(instr: int):
-    """
-    Decode a 32-bit instruction into global fields.
-    Reads register values from rf[].
-    Calls ControlUnit().
-    """
     global opcode, rd, rs1, rs2, funct3, funct7
     global imm, rs1_val, rs2_val, pc_at_decode
 
@@ -250,20 +219,17 @@ def Decode(instr: int):
     else:
         imm = 0
 
+    #read values from this register file array by using the register file ID 
     rs1_val = rf[rs1]
     rs2_val = rf[rs2]
 
     ControlUnit(opcode, funct3, funct7)
 
-
-# ─────────────────────────────────────────────
-# EXECUTE
-# ─────────────────────────────────────────────
+#Execute()
+#calculate jump address and sets zero  flags
+#section 2: JAL: branch target = pc at decode + imm
+#JALR: branch target = (rs1 val + imm) & ~1
 def Execute():
-    """
-    Perform ALU operation.
-    Updates alu_result, alu_zero, branch_target.
-    """
     global alu_result, alu_zero, branch_target
 
     operand_a = rs1_val
@@ -292,10 +258,8 @@ def Execute():
     else:
         branch_target = pc_at_decode + imm
 
-
-# ─────────────────────────────────────────────
-# MEMORY
-# ─────────────────────────────────────────────
+#Memory()
+#section 2: pass, JAL and JALR do not read or write memory
 def Mem() -> tuple[int, bool]:
     """
     Perform memory access.
@@ -314,10 +278,10 @@ def Mem() -> tuple[int, bool]:
 
     return 0, False
 
-
-# ─────────────────────────────────────────────
-# WRITEBACK
-# ─────────────────────────────────────────────
+#Writeback()
+#calculate return address pc at decode + 4
+#modify destination register rd w/ return address 
+#execution can return to instruction following jump when needed
 def Writeback(mem_read_data: int, mem_written: bool, mem_addr: int) -> list[str]:
     """
     Write result back to register file.
